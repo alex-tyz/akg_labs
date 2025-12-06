@@ -1,507 +1,508 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import tkinter as tk
-from tkinter import ttk, filedialog, simpledialog, messagebox
-from PIL import Image
+import numpy as np  # Библиотека численных вычислений
+from PIL import Image, ImageTk  # Для работы с изображениями
+import tkinter as tk  # Tkinter — стандартная GUI-библиотека Python
+from tkinter import ttk, messagebox, filedialog  # Красивые виджеты и диалоги
 
 
-class SphereBrightnessApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("ЛР 4. Расчет яркости на сфере")
-        self.root.geometry("1300x860")
+# =====================================================================
+# =============== БАЗОВЫЕ ВЫЧИСЛЕНИЯ ОСВЕЩЕНИЯ СФЕРЫ ===================
+# =====================================================================
 
-        self.setup_default_parameters()
-        self.setup_ui()
+def render_sphere(
+        W, H, Wres, Hres,
+        zO,
+        z_scr,
+        R, Cx, Cy, Cz,
+        kd, ks, shininess,
+        lights
+):
+    """
+    Основная функция, выполняющая расчёт:
+    • пересечения лучей со сферой
+    • нормалей
+    • освещения по модели Блинна–Фонга
+    • формирование итогового изображения
 
-    def setup_default_parameters(self):
-        self.W = 5000.0
-        self.H = 4000.0
-        self.Wres = 500
-        self.Hres = 400
-        self.observer_z = 6500.0
-        self.sphere_x = 0.0
-        self.sphere_y = 0.0
-        self.sphere_z = 2800.0
-        self.radius = 1500.0
-        self.kd = 0.7
-        self.ks = 0.35
-        self.shininess = 40.0
-        self.ambient = 0.05
-        self.light_defaults = [
-            {"x": -1800.0, "y": 1200.0, "z": 5200.0, "I0": 1400.0},
-            {"x": 1600.0, "y": -1000.0, "z": 4500.0, "I0": 1100.0},
-        ]
+    Возвращает:
+    - img_uint8 — изображение (0–255), готовое для отображения
+    - I_float   — абсолютные яркости (ненормированные)
+    - I_max     — максимальная яркость
+    - I_min     — минимальная ненулевая яркость
+    """
 
-    def setup_ui(self):
-        self.value_labels = []
+    # Создаём вектор наблюдателя O = (0, 0, zO)
+    O = np.array([0.0, 0.0, zO])
 
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    # Создаём вектор центра сферы
+    C = np.array([Cx, Cy, Cz])
 
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=2)
-        main_frame.columnconfigure(1, weight=3)
-        main_frame.rowconfigure(0, weight=1)
+    # --------------------------------------------------------------
+    # 1. ФОРМИРОВАНИЕ СЕТКИ ПИКСЕЛЕЙ ЭКРАНА
+    # --------------------------------------------------------------
 
-        left_frame = ttk.Frame(main_frame)
-        left_frame.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.W, tk.E), padx=(0, 10))
-        left_frame.columnconfigure(0, weight=1)
+    # Создаём координаты пикселей по X: от -W/2 до +W/2
+    xs = np.linspace(-W / 2, W / 2, Wres, endpoint=False) + W / (2 * Wres)
 
-        results_frame = ttk.LabelFrame(left_frame, text="Расчетные значения", padding="10")
-        results_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        self.results_text = tk.Text(results_frame, height=14, width=46, wrap=tk.WORD, font=("Courier", 9))
-        self.results_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        self.results_text.config(state=tk.DISABLED)
+    # Аналогично по Y: от -H/2 до +H/2
+    ys = np.linspace(-H / 2, H / 2, Hres, endpoint=False) + H / (2 * Hres)
 
-        controls = ttk.LabelFrame(left_frame, text="Параметры", padding="5")
-        controls.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        controls.columnconfigure(0, weight=1)
+    # 2D-сетка координат всех пикселей (размер: Hres × Wres)
+    X, Y = np.meshgrid(xs, ys)
 
-        notebook = ttk.Notebook(controls)
-        notebook.grid(row=0, column=0, sticky=(tk.W, tk.E))
+    # Превращаем в массив точек (каждая строка — пиксель)
+    Px = X.ravel()
+    Py = Y.ravel()
+    Pz = np.full_like(Px, z_scr)  # z-координата всех пикселей одинаковая
+    P_screen = np.stack([Px, Py, Pz], axis=1)
 
-        self.setup_parameter_controls(notebook)
+    # --------------------------------------------------------------
+    # 2. ПОСТРОЕНИЕ ЛУЧЕЙ ОТ НАБЛЮДАТЕЛЯ К ПИКСЕЛЯМ
+    # --------------------------------------------------------------
 
-        button_frame = ttk.Frame(left_frame)
-        button_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
-        button_frame.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(1, weight=1)
+    # Вектор направления: от наблюдателя до пикселя
+    dirs = P_screen - O
 
-        ttk.Button(button_frame, text="Рассчитать", command=self.calculate).grid(row=0, column=0, padx=5, sticky=(tk.W, tk.E))
-        ttk.Button(button_frame, text="Сохранить изображение", command=self.save_image).grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
+    # Нормировка направлений
+    dir_norm = np.linalg.norm(dirs, axis=1, keepdims=True)
+    dirs = dirs / np.maximum(dir_norm, 1e-8)
 
-        image_frame = ttk.LabelFrame(main_frame, text="Распределение яркости", padding="5")
-        image_frame.grid(row=0, column=1, sticky=(tk.N, tk.S, tk.W, tk.E))
-        image_frame.rowconfigure(0, weight=1)
-        image_frame.columnconfigure(0, weight=1)
+    # --------------------------------------------------------------
+    # 3. РАСЧЁТ ПЕРЕСЕЧЕНИЯ ЛУЧА СО СФЕРОЙ
+    # --------------------------------------------------------------
 
-        self.image_fig = plt.Figure(figsize=(6.4, 5.4))
-        self.image_canvas = FigureCanvasTkAgg(self.image_fig, master=image_frame)
-        self.image_canvas.get_tk_widget().grid(row=0, column=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+    # Вычисляем коэффициенты квадратного уравнения
+    OC = O - C
+    a = np.sum(dirs * dirs, axis=1)
+    b = 2.0 * np.sum(dirs * OC, axis=1)
+    c = np.dot(OC, OC) - R ** 2
 
-        self.setup_var_traces()
-        self.calculate()
+    # Дискриминант
+    discriminant = b ** 2 - 4 * a * c
+    hit_mask = discriminant >= 0.0  # True — луч пересекает сферу
 
-    def setup_parameter_controls(self, notebook):
-        # Экран
-        screen_frame = ttk.Frame(notebook, padding=5)
-        notebook.add(screen_frame, text="Экран")
-        for i in range(3):
-            screen_frame.columnconfigure(i, weight=1)
-        self.W_var = tk.DoubleVar(value=self.W)
-        self.create_parameter_control(screen_frame, "Ширина W (мм)", self.W_var, 0, 100.0, 10000.0)
-        self.H_var = tk.DoubleVar(value=self.H)
-        self.create_parameter_control(screen_frame, "Высота H (мм)", self.H_var, 1, 100.0, 10000.0)
-        self.Wres_var = tk.IntVar(value=self.Wres)
-        self.create_parameter_control(screen_frame, "Разрешение Wres (пикс)", self.Wres_var, 2, 200, 800, integer=True)
-        self.Hres_var = tk.IntVar(value=self.Hres)
-        self.create_parameter_control(screen_frame, "Разрешение Hres (пикс)", self.Hres_var, 3, 200, 800, integer=True)
+    # Изначально t = ∞ (нет пересечения)
+    t = np.full_like(a, np.inf)
 
-        # Сфера и наблюдатель
-        sphere_frame = ttk.Frame(notebook, padding=5)
-        notebook.add(sphere_frame, text="Сфера/Наблюдатель")
-        for i in range(3):
-            sphere_frame.columnconfigure(i, weight=1)
-        self.sphere_x_var = tk.DoubleVar(value=self.sphere_x)
-        self.create_parameter_control(sphere_frame, "xC (мм)", self.sphere_x_var, 0, -10000.0, 10000.0, format_str="{:.0f}")
-        self.sphere_y_var = tk.DoubleVar(value=self.sphere_y)
-        self.create_parameter_control(sphere_frame, "yC (мм)", self.sphere_y_var, 1, -10000.0, 10000.0, format_str="{:.0f}")
-        self.sphere_z_var = tk.DoubleVar(value=self.sphere_z)
-        self.create_parameter_control(sphere_frame, "zC (мм)", self.sphere_z_var, 2, 100.0, 10000.0)
-        self.radius_var = tk.DoubleVar(value=self.radius)
-        self.create_parameter_control(sphere_frame, "Радиус R (мм)", self.radius_var, 3, 100.0, 5000.0)
-        self.observer_z_var = tk.DoubleVar(value=self.observer_z)
-        self.create_parameter_control(sphere_frame, "zO наблюдателя (мм)", self.observer_z_var, 4, 500.0, 15000.0)
+    sqrtD = np.zeros_like(a)
+    sqrtD[hit_mask] = np.sqrt(discriminant[hit_mask])
 
-        # Материал
-        material_frame = ttk.Frame(notebook, padding=5)
-        notebook.add(material_frame, text="Поверхность")
-        for i in range(3):
-            material_frame.columnconfigure(i, weight=1)
-        self.kd_var = tk.DoubleVar(value=self.kd)
-        self.create_parameter_control(material_frame, "Kd (диффузный)", self.kd_var, 0, 0.0, 1.0, format_str="{:.2f}")
-        self.ks_var = tk.DoubleVar(value=self.ks)
-        self.create_parameter_control(material_frame, "Ks (зеркальный)", self.ks_var, 1, 0.0, 1.0, format_str="{:.2f}")
-        self.shininess_var = tk.DoubleVar(value=self.shininess)
-        self.create_parameter_control(material_frame, "Шероховатость n", self.shininess_var, 2, 1.0, 200.0)
-        self.ambient_var = tk.DoubleVar(value=self.ambient)
-        self.create_parameter_control(material_frame, "Ka (окружающий)", self.ambient_var, 3, 0.0, 0.5, format_str="{:.2f}")
+    # Два корня квадр. уравнения
+    t1 = (-b - sqrtD) / (2 * a)
+    t2 = (-b + sqrtD) / (2 * a)
 
-        # Источники света
-        lights_frame = ttk.Frame(notebook, padding=5)
-        notebook.add(lights_frame, text="Источники")
-        lights_frame.columnconfigure(0, weight=1)
-        self.light_vars = []
-        for idx, defaults in enumerate(self.light_defaults):
-            light_frame = ttk.LabelFrame(lights_frame, text=f"Источник {idx + 1}", padding="5")
-            light_frame.grid(row=idx, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-            vars_dict = {
-                "x": tk.DoubleVar(value=defaults["x"]),
-                "y": tk.DoubleVar(value=defaults["y"]),
-                "z": tk.DoubleVar(value=defaults["z"]),
-                "I0": tk.DoubleVar(value=defaults["I0"]),
-            }
-            self.create_parameter_control(light_frame, "xL (мм)", vars_dict["x"], 0, -10000.0, 10000.0, format_str="{:.0f}")
-            self.create_parameter_control(light_frame, "yL (мм)", vars_dict["y"], 1, -10000.0, 10000.0, format_str="{:.0f}")
-            self.create_parameter_control(light_frame, "zL (мм)", vars_dict["z"], 2, 100.0, 10000.0)
-            self.create_parameter_control(light_frame, "I0 (Вт/ср)", vars_dict["I0"], 3, 0.01, 10000.0, format_str="{:.1f}")
-            self.light_vars.append(vars_dict)
+    # Выбираем ближний положительный корень
+    t_candidate = np.where((t1 > 0) & ((t1 < t2) | (t2 <= 0)), t1, t2)
+    positive = (t_candidate > 0) & hit_mask
+    t[positive] = t_candidate[positive]
 
-    def create_parameter_control(self, parent, text, var, row, min_val, max_val, suffix="", format_str="{:.0f}", integer=False):
-        ttk.Label(parent, text=text).grid(row=row, column=0, sticky=tk.W, pady=2)
-        scale = ttk.Scale(parent, from_=min_val, to=max_val, variable=var, orient=tk.HORIZONTAL, length=180)
-        scale.grid(row=row, column=1, sticky=(tk.W, tk.E), padx=5, pady=2)
-        display = ttk.Label(parent, text=format_str.format(var.get()) + suffix, cursor="hand2")
-        display.grid(row=row, column=2, padx=5, pady=2)
-        display.bind(
-            "<Button-1>",
-            lambda event, v=var, label=text, min_v=min_val, max_v=max_val, integer=integer: self.prompt_value(label, v, min_v, max_v, integer=integer),
-        )
-        self.value_labels.append((var, display, suffix, format_str))
+    final_hit_mask = np.isfinite(t)  # True — пиксель действительно видит сферу
 
-    def setup_var_traces(self):
-        for var, label, suffix, fmt in self.value_labels:
-            var.trace_add("write", lambda *args, v=var, lbl=label, suf=suffix, f=fmt: self.update_label(v, lbl, suf, f))
+    # --------------------------------------------------------------
+    # 4. КООРДИНАТЫ ТОЧЕК НА СФЕРЕ
+    # --------------------------------------------------------------
 
-    def update_label(self, var, label_widget, suffix="", format_str="{:.0f}"):
+    P = O + dirs * t[:, np.newaxis]  # Точки пересечения лучей со сферой
+
+    # --------------------------------------------------------------
+    # 5. НОРМАЛИ И ВЕКТОР НАБЛЮДАТЕЛЯ
+    # --------------------------------------------------------------
+
+    # Нормаль к сфере N = нормированный (P - C)
+    N = P - C
+    N_norm = np.linalg.norm(N, axis=1, keepdims=True)
+    N = N / np.maximum(N_norm, 1e-8)
+
+    # Вектор к наблюдателю
+    V = O - P
+    V_norm = np.linalg.norm(V, axis=1, keepdims=True)
+    V = V / np.maximum(V_norm, 1e-8)
+
+    # --------------------------------------------------------------
+    # 6. ОСВЕЩЕНИЕ ПО МОДЕЛИ БЛИННА–ФОНГА
+    # --------------------------------------------------------------
+
+    I = np.zeros(P.shape[0], dtype=np.float64)
+
+    # Перебираем все источники света
+    for (lx, ly, lz, I0) in lights:
+        # Позиция источника
+        Lpos = np.array([lx, ly, lz])
+
+        # Направление света L_dir
+        L = Lpos - P
+        L_norm = np.linalg.norm(L, axis=1, keepdims=True)
+        L_dir = L / np.maximum(L_norm, 1e-8)
+
+        # Диффузная компонента — Ламберт
+        cos_theta = np.sum(N * L_dir, axis=1)
+        cos_theta = np.clip(cos_theta, 0.0, None)
+
+        # Полувектор для блика
+        Hvec = L_dir + V
+        H_norm = np.linalg.norm(Hvec, axis=1, keepdims=True)
+        H_dir = Hvec / np.maximum(H_norm, 1e-8)
+
+        # Зеркальная составляющая
+        cos_alpha = np.sum(N * H_dir, axis=1)
+        cos_alpha = np.clip(cos_alpha, 0.0, None)
+
+        # Диффузная и зеркальная яркость
+        I_diff = kd * I0 * cos_theta
+        I_spec = ks * I0 * (cos_alpha ** shininess)
+
+        # Общая яркость = сумма от всех источников
+        I += I_diff + I_spec
+
+    # Пиксели вне сферы = чёрные
+    I[~final_hit_mask] = 0.0
+
+    # Переводим в матрицу Hres × Wres
+    I_img = I.reshape(Hres, Wres)
+
+    # Максимальная яркость
+    I_max = float(I_img.max())
+
+    # Минимальная ненулевая яркость
+    if np.any(I_img > 0):
+        I_min = float(I_img[I_img > 0].min())
+    else:
+        I_min = 0.0
+
+    # --------------------------------------------------------------
+    # 7. НОРМИРОВКА 0–255 ДЛЯ ИЗОБРАЖЕНИЯ
+    # --------------------------------------------------------------
+
+    if I_max > 0:
+        I_norm = (I_img / I_max) * 255.0
+    else:
+        I_norm = I_img
+
+    img_uint8 = np.clip(I_norm, 0, 255).astype(np.uint8)
+
+    # Возвращаем промежуточные и финальные данные
+    return img_uint8, I_img, I_max, I_min
+
+
+def compute_point_brightness(point, center, observer, kd, ks, shininess, lights):
+    """Возвращает абсолютную яркость выбранной точки сферы."""
+    normal = point - center
+    normal_norm = np.linalg.norm(normal)
+    if normal_norm <= 1e-8:
+        return 0.0
+    normal = normal / normal_norm
+
+    view_vec = observer - point
+    view_norm = np.linalg.norm(view_vec)
+    if view_norm <= 1e-8:
+        return 0.0
+    view_dir = view_vec / view_norm
+
+    if np.dot(normal, view_dir) <= 0:
+        return 0.0
+
+    intensity = 0.0
+    for lx, ly, lz, I0 in lights:
+        light_pos = np.array([lx, ly, lz])
+        light_vec = light_pos - point
+        light_norm = np.linalg.norm(light_vec)
+        if light_norm <= 1e-8:
+            continue
+        light_dir = light_vec / light_norm
+        cos_theta = np.dot(normal, light_dir)
+        if cos_theta <= 0:
+            continue
+        diffuse = kd * I0 * cos_theta
+        half_vec = light_dir + view_dir
+        half_norm = np.linalg.norm(half_vec)
+        specular = 0.0
+        if half_norm > 1e-8:
+            half_vec /= half_norm
+            specular = ks * I0 * max(np.dot(normal, half_vec), 0.0) ** shininess
+        intensity += diffuse + specular
+    return intensity
+
+# =====================================================================
+# ============================= GUI ЧАСТЬ ==============================
+# =====================================================================
+
+class SphereApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("Sphere Lighting (Блинн-Фонг)")  # Заголовок окна
+        self.style = ttk.Style(self)
         try:
-            value = var.get()
+            self.style.theme_use("clam")
         except tk.TclError:
-            return
-        label_widget.config(text=format_str.format(value) + suffix)
+            pass
+        self.style.configure("Param.Horizontal.TScale", troughcolor="#444", background="#f5f5f5", thickness=10)
+        self.style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"), padding=8)
+        self.style.configure("Secondary.TButton", font=("Segoe UI", 10), padding=6)
 
-    def prompt_value(self, title, variable, min_val, max_val, integer=False):
-        current_value = variable.get()
-        prompt = f"{title}\nДиапазон: [{min_val}, {max_val}]"
-        value = simpledialog.askstring("Ввод значения", prompt, initialvalue=f"{current_value}")
-        if value is None:
-            return
-        try:
-            value = float(value.replace(",", "."))
-        except ValueError:
-            messagebox.showerror("Ошибка ввода", "Введите корректное число.")
-            return
-        if value < min_val or value > max_val:
-            messagebox.showerror("Ошибка ввода", f"Значение должно быть в диапазоне [{min_val}, {max_val}].")
-            return
-        if integer:
-            value = int(round(value))
-        variable.set(value)
+        # Виджет для отображения изображения слева
+        self.image_label = ttk.Label(self)
+        self.image_label.grid(row=0, column=0, rowspan=20, padx=5, pady=5)
 
-    def calculate(self):
-        brightness, mask = self.calculate_brightness_map()
-        brightness_max = np.max(brightness[mask]) if np.any(mask) else 0.0
+        # Правая панель для настроек
+        control_panel = ttk.Frame(self)
+        control_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=5)
+        control_panel.rowconfigure(0, weight=1)
+        control_panel.columnconfigure(0, weight=1)
 
-        self.brightness_data = brightness
-        self.visible_mask = mask
+        notebook = ttk.Notebook(control_panel)
+        notebook.grid(row=0, column=0, sticky="nsew")
 
-        if brightness_max > 0:
-            normalized = (brightness / brightness_max * 255).astype(np.uint8)
-        else:
-            normalized = np.zeros_like(brightness, dtype=np.uint8)
+        def slider_factory(frame):
+            frame.columnconfigure(1, weight=1)
+            row_state = {"value": 0}
 
-        self.image_data = normalized
+            def add_slider(text, default, min_val, max_val, fmt="{:.0f}", integer=False):
+                r = row_state["value"]
+                ttk.Label(frame, text=text).grid(row=r, column=0, sticky="w", padx=(0, 4), pady=2)
+                var = tk.DoubleVar(value=default)
+                scale = ttk.Scale(
+                    frame,
+                    from_=min_val,
+                    to=max_val,
+                    variable=var,
+                    orient=tk.HORIZONTAL,
+                    length=150,
+                    style="Param.Horizontal.TScale",
+                )
+                scale.grid(row=r, column=1, sticky="we", padx=4, pady=2)
+                value_lbl = ttk.Label(frame, text=fmt.format(default), width=8, anchor="w")
+                value_lbl.grid(row=r, column=2, sticky="w", padx=(2, 0))
 
-        self.update_results_display(brightness, mask, brightness_max)
-        self.render_image(normalized)
+                def update_label(*_):
+                    value = var.get()
+                    if integer:
+                        value = round(value)
+                    value_lbl.config(text=fmt.format(value))
 
-    def calculate_brightness_map(self):
-        W = self.W_var.get()
-        H = self.H_var.get()
-        Wres = self.Wres_var.get()
-        Hres = self.Hres_var.get()
-        xC = self.sphere_x_var.get()
-        yC = self.sphere_y_var.get()
-        zC = self.sphere_z_var.get()
-        R = self.radius_var.get()
-        zO = self.observer_z_var.get()
-        kd = self.kd_var.get()
-        ks = self.ks_var.get()
-        shininess = self.shininess_var.get()
-        ambient = self.ambient_var.get()
+                var.trace_add("write", update_label)
+                row_state["value"] += 1
+                return var
 
-        pixel_size_x = W / Wres
-        pixel_size_y = H / Hres
-        if abs(pixel_size_x - pixel_size_y) > 0.01:
-            pixel_size = max(pixel_size_x, pixel_size_y)
-            Wres = int(W / pixel_size)
-            Hres = int(H / pixel_size)
-            self.Wres_var.set(Wres)
-            self.Hres_var.set(Hres)
+            add_slider.row_state = row_state
+            return add_slider
 
-        x = np.linspace(-W / 2, W / 2, Wres)
-        y = np.linspace(-H / 2, H / 2, Hres)
-        X, Y = np.meshgrid(x, y)
+        # Tabs: Screen, Observer, Sphere, Material, Lights 1&2
+        screen_tab = ttk.Frame(notebook, padding=6)
+        observer_tab = ttk.Frame(notebook, padding=6)
+        sphere_tab = ttk.Frame(notebook, padding=6)
+        material_tab = ttk.Frame(notebook, padding=6)
+        light1_tab = ttk.Frame(notebook, padding=6)
+        light2_tab = ttk.Frame(notebook, padding=6)
 
-        observer = np.array([0.0, 0.0, zO])
-        center = np.array([xC, yC, zC])
+        notebook.add(screen_tab, text="Экран")
+        notebook.add(observer_tab, text="Наблюдатель")
+        notebook.add(sphere_tab, text="Сфера")
+        notebook.add(material_tab, text="Материал")
+        notebook.add(light1_tab, text="Источник 1")
+        notebook.add(light2_tab, text="Источник 2")
 
-        dir_x = X.copy()
-        dir_y = Y.copy()
-        dir_z = np.full_like(X, -zO)
-        dir_norm = np.sqrt(dir_x**2 + dir_y**2 + dir_z**2)
-        dir_x /= dir_norm
-        dir_y /= dir_norm
-        dir_z /= dir_norm
+        add_screen = slider_factory(screen_tab)
+        add_observer = slider_factory(observer_tab)
+        add_sphere = slider_factory(sphere_tab)
+        add_material = slider_factory(material_tab)
+        add_light1 = slider_factory(light1_tab)
+        add_light2 = slider_factory(light2_tab)
 
-        ocx = observer[0] - center[0]
-        ocy = observer[1] - center[1]
-        ocz = observer[2] - center[2]
+        self.W_var = add_screen("W (мм)", 800, 100, 10000)
+        self.H_var = add_screen("H (мм)", 600, 100, 10000)
+        self.Wres_var = add_screen("Wres (пикс)", 600, 200, 800, fmt="{:.0f}", integer=True)
+        hres_row = add_screen.row_state["value"]
+        ttk.Label(screen_tab, text="Hres (пикс)").grid(row=hres_row, column=0, sticky="w", pady=2)
+        self.Hres_var = tk.StringVar(value="450")
+        ttk.Label(screen_tab, textvariable=self.Hres_var).grid(row=hres_row, column=1, columnspan=2, sticky="w", pady=2)
+        add_screen.row_state["value"] += 1
+        self.zscr_var = add_screen("z_scr (мм)", 0, -5000, 5000)
 
-        b = 2 * (ocx * dir_x + ocy * dir_y + ocz * dir_z)
-        c = ocx**2 + ocy**2 + ocz**2 - R**2
+        self.zO_var = add_observer("zO (мм)", -1000, -10000, 10000)
 
-        discriminant = b**2 - 4 * c
-        mask = discriminant >= 0
-        t = np.full_like(X, np.nan, dtype=np.float64)
-        sqrt_disc = np.zeros_like(X)
-        sqrt_disc[mask] = np.sqrt(np.clip(discriminant[mask], 0, None))
-        t1 = np.full_like(X, np.nan, dtype=np.float64)
-        t2 = np.full_like(X, np.nan, dtype=np.float64)
-        t1[mask] = (-b[mask] - sqrt_disc[mask]) / 2.0
-        t2[mask] = (-b[mask] + sqrt_disc[mask]) / 2.0
-        t_candidate = np.where((t1 > 0) & np.isfinite(t1), t1, t2)
-        mask &= t_candidate > 0
-        t[mask] = t_candidate[mask]
+        self.R_var = add_sphere("R (мм)", 300, 100, 5000)
+        self.Cx_var = add_sphere("Cx (мм)", 0, -10000, 10000)
+        self.Cy_var = add_sphere("Cy (мм)", 0, -10000, 10000)
+        self.Cz_var = add_sphere("Cz (мм)", 800, 100, 10000)
 
-        point_x = np.zeros_like(X)
-        point_y = np.zeros_like(X)
-        point_z = np.zeros_like(X)
-        point_x[mask] = observer[0] + dir_x[mask] * t[mask]
-        point_y[mask] = observer[1] + dir_y[mask] * t[mask]
-        point_z[mask] = observer[2] + dir_z[mask] * t[mask]
+        self.kd_var = add_material("kd", 0.9, 0.0, 1.0, fmt="{:.2f}")
+        self.ks_var = add_material("ks", 0.8, 0.0, 1.0, fmt="{:.2f}")
+        self.shn_var = add_material("shininess", 50, 1, 200, fmt="{:.0f}", integer=True)
 
-        normal_x = np.zeros_like(X)
-        normal_y = np.zeros_like(X)
-        normal_z = np.zeros_like(X)
-        normal_x[mask] = (point_x[mask] - xC) / R
-        normal_y[mask] = (point_y[mask] - yC) / R
-        normal_z[mask] = (point_z[mask] - zC) / R
+        self.L1x_var = add_light1("L1x", 3000, -10000, 10000)
+        self.L1y_var = add_light1("L1y", 2000, -10000, 10000)
+        self.L1z_var = add_light1("L1z", -500, -5000, 10000)
+        self.I1_var = add_light1("I01", 500, 0.01, 10000, fmt="{:.1f}")
 
-        view_x = -dir_x
-        view_y = -dir_y
-        view_z = -dir_z
+        self.L2x_var = add_light2("L2x", -2000, -10000, 10000)
+        self.L2y_var = add_light2("L2y", 3000, -10000, 10000)
+        self.L2z_var = add_light2("L2z", -800, -5000, 10000)
+        self.I2_var = add_light2("I02", 200, 0.01, 10000, fmt="{:.1f}")
 
-        brightness = np.zeros_like(X, dtype=np.float64)
-        brightness[mask] = ambient
+        # Строка вывода максимальной/минимальной яркости
+        self.info_var = tk.StringVar(value="")
+        ttk.Label(control_panel, textvariable=self.info_var, foreground="#004b8d").grid(
+            row=1, column=0, sticky="w", pady=(8, 4)
+        )
 
-        for light in self.light_vars:
-            xL = light["x"].get()
-            yL = light["y"].get()
-            zL = light["z"].get()
-            I0 = light["I0"].get()
-
-            light_vec_x = np.zeros_like(X)
-            light_vec_y = np.zeros_like(X)
-            light_vec_z = np.zeros_like(X)
-            light_vec_x[mask] = xL - point_x[mask]
-            light_vec_y[mask] = yL - point_y[mask]
-            light_vec_z[mask] = zL - point_z[mask]
-
-            distance = np.ones_like(X)
-            distance[mask] = np.sqrt(
-                light_vec_x[mask] ** 2 + light_vec_y[mask] ** 2 + light_vec_z[mask] ** 2
-            )
-            attenuation = np.zeros_like(X)
-            attenuation[mask] = I0 / np.maximum(distance[mask] ** 2, 1e-6)
-
-            light_dir_x = np.zeros_like(X)
-            light_dir_y = np.zeros_like(X)
-            light_dir_z = np.zeros_like(X)
-            light_dir_x[mask] = light_vec_x[mask] / distance[mask]
-            light_dir_y[mask] = light_vec_y[mask] / distance[mask]
-            light_dir_z[mask] = light_vec_z[mask] / distance[mask]
-
-            cos_theta = np.zeros_like(X)
-            cos_theta[mask] = np.clip(
-                normal_x[mask] * light_dir_x[mask]
-                + normal_y[mask] * light_dir_y[mask]
-                + normal_z[mask] * light_dir_z[mask],
-                0.0,
-                None,
-            )
-
-            diffuse = np.zeros_like(X)
-            diffuse[mask] = kd * attenuation[mask] * cos_theta[mask]
-
-            half_x = np.zeros_like(X)
-            half_y = np.zeros_like(X)
-            half_z = np.zeros_like(X)
-            half_x[mask] = light_dir_x[mask] + view_x[mask]
-            half_y[mask] = light_dir_y[mask] + view_y[mask]
-            half_z[mask] = light_dir_z[mask] + view_z[mask]
-
-            half_norm = np.ones_like(X)
-            half_norm[mask] = np.sqrt(half_x[mask] ** 2 + half_y[mask] ** 2 + half_z[mask] ** 2)
-            half_x[mask] /= np.maximum(half_norm[mask], 1e-8)
-            half_y[mask] /= np.maximum(half_norm[mask], 1e-8)
-            half_z[mask] /= np.maximum(half_norm[mask], 1e-8)
-
-            spec_angle = np.zeros_like(X)
-            spec_angle[mask] = np.clip(
-                normal_x[mask] * half_x[mask]
-                + normal_y[mask] * half_y[mask]
-                + normal_z[mask] * half_z[mask],
-                0.0,
-                None,
-            )
-
-            specular = np.zeros_like(X)
-            specular[mask] = ks * attenuation[mask] * (spec_angle[mask] ** shininess)
-
-            brightness += diffuse + specular
-
-        return brightness, mask
-
-    def render_image(self, normalized):
-        self.image_fig.clear()
-        ax = self.image_fig.add_subplot(1, 1, 1)
-        if normalized.size > 0:
-            extent = [
-                -self.W_var.get() / 2,
-                self.W_var.get() / 2,
-                -self.H_var.get() / 2,
-                self.H_var.get() / 2,
-            ]
-            im = ax.imshow(
-                normalized,
-                cmap="gray",
-                origin="lower",
-                extent=extent,
-            )
-            ax.set_xlabel("X (мм)")
-            ax.set_ylabel("Y (мм)")
-            ax.set_title("Распределение яркости на сфере")
-            self.image_fig.colorbar(im, ax=ax, label="Нормированная яркость (0-255)", fraction=0.046, pad=0.04)
-        self.image_fig.tight_layout()
-        self.image_canvas.draw()
-
-    def calculate_point_brightness(self, point):
-        xC = self.sphere_x_var.get()
-        yC = self.sphere_y_var.get()
-        zC = self.sphere_z_var.get()
-        R = self.radius_var.get()
-        kd = self.kd_var.get()
-        ks = self.ks_var.get()
-        shininess = self.shininess_var.get()
-        ambient = self.ambient_var.get()
-        observer = np.array([0.0, 0.0, self.observer_z_var.get()])
-
-        center = np.array([xC, yC, zC])
-        normal = point - center
-        normal_norm = np.linalg.norm(normal)
-        if normal_norm == 0:
-            return 0.0
-        normal = normal / normal_norm
-
-        view_vec = observer - point
-        view_norm = np.linalg.norm(view_vec)
-        if view_norm == 0:
-            return 0.0
-        view_dir = view_vec / view_norm
-        if np.dot(normal, view_dir) <= 0:
-            return 0.0
-
-        brightness = ambient
-        for light in self.light_vars:
-            light_pos = np.array([light["x"].get(), light["y"].get(), light["z"].get()])
-            I0 = light["I0"].get()
-            light_vec = light_pos - point
-            distance = np.linalg.norm(light_vec)
-            if distance <= 1e-6:
-                continue
-            light_dir = light_vec / distance
-            cos_theta = np.dot(normal, light_dir)
-            if cos_theta <= 0:
-                continue
-            attenuation = I0 / (distance**2)
-            diffuse = kd * attenuation * cos_theta
-
-            half_vec = light_dir + view_dir
-            half_norm = np.linalg.norm(half_vec)
-            specular = 0.0
-            if half_norm > 1e-8:
-                half_vec /= half_norm
-                specular = ks * attenuation * max(np.dot(normal, half_vec), 0.0) ** shininess
-
-            brightness += diffuse + specular
-
-        return brightness
-
-    def update_results_display(self, brightness, mask, max_value):
-        xC = self.sphere_x_var.get()
-        yC = self.sphere_y_var.get()
-        zC = self.sphere_z_var.get()
-        R = self.radius_var.get()
-        observer = np.array([0.0, 0.0, self.observer_z_var.get()])
-        center = np.array([xC, yC, zC])
-
-        front_dir = observer - center
-        if np.linalg.norm(front_dir) == 0:
-            front_dir = np.array([0.0, 0.0, 1.0])
-        else:
-            front_dir = front_dir / np.linalg.norm(front_dir)
-        front_point = center + front_dir * R
-        x_point = center + np.array([R, 0.0, 0.0])
-        y_point = center + np.array([0.0, R, 0.0])
-
-        points = [
-            ("Точка зрения", front_point),
-            ("Точка +X", x_point),
-            ("Точка +Y", y_point),
-        ]
-
-        results = []
-        for label, pt in points:
-            brightness_value = self.calculate_point_brightness(pt)
-            results.append((label, pt, brightness_value))
-
-        valid_values = brightness[mask]
-        if valid_values.size > 0:
-            min_val = np.min(valid_values)
-            max_val = np.max(valid_values)
-        else:
-            min_val = 0.0
-            max_val = 0.0
-
-        self.results_text.config(state=tk.NORMAL)
-        self.results_text.delete(1.0, tk.END)
-
-        text = "Яркость на сфере (Вт/м²):\n"
-        text += f"{'='*50}\n\n"
-        for label, pt, value in results:
-            text += f"{label} ({pt[0]:.1f}, {pt[1]:.1f}, {pt[2]:.1f}):\n"
-            text += f"  L = {value:.6e}\n\n"
-
-        text += f"{'='*50}\n"
-        text += "Статистика по видимой части сферы:\n"
-        text += f"  L_max = {max_val:.6e}\n"
-        text += f"  L_min = {min_val:.6e}\n"
-        text += f"  Нормировка выполнялась по L_max = {max_value:.6e}\n"
-
-        self.results_text.insert(1.0, text)
+        results_frame = ttk.LabelFrame(control_panel, text="Расчетные значения", padding=6)
+        results_frame.grid(row=2, column=0, sticky="nsew")
+        results_frame.columnconfigure(0, weight=1)
+        self.results_text = tk.Text(results_frame, height=7, width=36, font=("Courier New", 9), wrap=tk.WORD)
+        self.results_text.grid(row=0, column=0, sticky="nsew")
         self.results_text.config(state=tk.DISABLED)
 
-    def save_image(self):
-        if not hasattr(self, "image_data"):
+        # Кнопка запуска рендера
+        btn = ttk.Button(control_panel, text="Render", command=self.on_render, style="Accent.TButton")
+        btn.grid(row=3, column=0, pady=4, sticky="we")
+
+        # Кнопка сохранения изображения
+        self.save_btn = ttk.Button(control_panel, text="Save image", command=self.on_save, style="Secondary.TButton")
+        self.save_btn.grid(row=4, column=0, pady=(0, 6), sticky="we")
+
+        # Текущие изображения
+        self.current_photo = None
+        self.last_pil_image = None
+
+        # Первый автоматический рендер
+        self.on_render()
+
+    # ----------------------------------------------------------------------
+    # ВЫПОЛНЕНИЕ РАСЧЁТА И ПОКАЗ ИЗОБРАЖЕНИЯ
+    # ----------------------------------------------------------------------
+    def on_render(self):
+        try:
+            W = float(self.W_var.get())
+            H = float(self.H_var.get())
+            Wres = int(self.Wres_var.get())
+
+            # Вычисляем Hres так, чтобы пиксели были квадратными:
+            # pixel_size = W / Wres = H / Hres  =>  Hres = H / (W / Wres) = Wres * H / W
+            if W <= 0:
+                raise ValueError("W must be > 0")
+            Hres = max(1, int(round(Wres * H / W)))
+            self.Hres_var.set(str(Hres))
+
+            z_scr = float(self.zscr_var.get())
+            zO = float(self.zO_var.get())
+
+            R = float(self.R_var.get())
+            Cx = float(self.Cx_var.get())
+            Cy = float(self.Cy_var.get())
+            Cz = float(self.Cz_var.get())
+
+            kd = float(self.kd_var.get())
+            ks = float(self.ks_var.get())
+            sh = float(self.shn_var.get())
+
+            L1x = float(self.L1x_var.get())
+            L1y = float(self.L1y_var.get())
+            L1z = float(self.L1z_var.get())
+            I01 = float(self.I1_var.get())
+
+            L2x = float(self.L2x_var.get())
+            L2y = float(self.L2y_var.get())
+            L2z = float(self.L2z_var.get())
+            I02 = float(self.I2_var.get())
+
+            lights = [
+                (L1x, L1y, L1z, I01),
+                (L2x, L2y, L2z, I02),
+            ]
+            observer = np.array([0.0, 0.0, zO])
+            center = np.array([Cx, Cy, Cz])
+
+            # Запуск расчёта яркости
+            img_uint8, I_float, I_max, I_min = render_sphere(
+                W, H, Wres, Hres,
+                zO,
+                z_scr,
+                R, Cx, Cy, Cz,
+                kd, ks, sh,
+                lights
+            )
+
+            # Конвертируем NumPy → PIL
+            pil_img = Image.fromarray(img_uint8, mode="L")
+            self.last_pil_image = pil_img
+
+            # Показываем изображение (масштабируем, если нужно)
+            display_img = pil_img
+            self.current_photo = ImageTk.PhotoImage(display_img)
+            self.image_label.configure(image=self.current_photo)
+
+            # Показываем максимум и минимум яркости
+            self.info_var.set(f"Max = {I_max:.3g}, Min>0 = {I_min:.3g}")
+            sample_points = self.get_sample_points(center, observer, R)
+            point_values = [
+                (label, point, compute_point_brightness(point, center, observer, kd, ks, sh, lights))
+                for label, point in sample_points
+            ]
+            self.update_results_panel(point_values, I_max, I_min)
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
+
+    # ----------------------------------------------------------------------
+    # СОХРАНЕНИЕ ИЗОБРАЖЕНИЯ В ФАЙЛ
+    # ----------------------------------------------------------------------
+    def on_save(self):
+        """Сохранение текущего изображения."""
+        if self.last_pil_image is None:
+            messagebox.showwarning("Нет изображения", "Сначала нажмите Render.")
             return
 
         filename = filedialog.asksaveasfilename(
+            title="Сохранить изображение",
             defaultextension=".png",
-            filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg"), ("All files", "*.*")],
+            filetypes=[("PNG image", "*.png"), ("All files", "*.*")]
         )
-        if not filename:
-            return
 
-        img = Image.fromarray(self.image_data, mode="L")
-        img.save(filename)
-        print(f"Изображение сохранено: {filename}")
+        if filename:
+            try:
+                self.last_pil_image.save(filename)
+                messagebox.showinfo("Сохранено", f"Изображение сохранено в:\n{filename}")
+            except Exception as e:
+                messagebox.showerror("Ошибка сохранения", str(e))
+
+    def get_sample_points(self, center, observer, radius):
+        """Возвращает три контрольные точки на сфере."""
+        front_dir = observer - center
+        norm = np.linalg.norm(front_dir)
+        if norm <= 1e-8:
+            front_dir = np.array([0.0, 0.0, 1.0])
+        else:
+            front_dir = front_dir / norm
+        front_point = center + front_dir * radius
+        x_point = center + np.array([radius, 0.0, 0.0])
+        y_point = center + np.array([0.0, radius, 0.0])
+        return [
+            ("Видимая точка", front_point),
+            ("+X направление", x_point),
+            ("+Y направление", y_point),
+        ]
+
+    def update_results_panel(self, point_values, max_val, min_val):
+        """Выводит расчетные значения яркости в текстовом окне."""
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        header = "Точка               L (Вт/м²)\n"
+        header += "-" * 32 + "\n"
+        self.results_text.insert(tk.END, header)
+        for label, point, value in point_values:
+            self.results_text.insert(
+                tk.END,
+                f"{label:16s}: {value: .5e}\n"
+            )
+        self.results_text.insert(tk.END, "\n")
+        self.results_text.insert(tk.END, f"Lmax = {max_val:.5e}\n")
+        self.results_text.insert(tk.END, f"Lmin = {min_val:.5e}\n")
+        self.results_text.config(state=tk.DISABLED)
 
 
+# =====================================================================
+# ======================== ЗАПУСК ПРИЛОЖЕНИЯ ==========================
+# =====================================================================
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = SphereBrightnessApp(root)
-    root.mainloop()
+    app = SphereApp()  # создаём объект GUI
+    app.mainloop()  # запускаем главный цикл Tkinter

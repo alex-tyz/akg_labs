@@ -7,28 +7,37 @@ from PIL import Image
 
 
 class IlluminationCalculator:
+    """Tkinter-приложение для расчета и визуализации освещенности на плоскости."""
+
     def __init__(self, root):
+        """Инициализирует корневое окно и создаёт интерфейс с параметрами по умолчанию."""
         self.root = root
         self.root.title("Расчет освещенности на плоскости")
         self.root.geometry("1400x900")
         
         self.setup_default_parameters()
         self.setup_ui()
+    
+    # ------------------------------ ПАРАМЕТРЫ ПО УМОЛЧАНИЮ ----------------------------- #
         
     def setup_default_parameters(self):
-        self.W = 5000.0
-        self.H = 5000.0
-        self.Wres = 400
-        self.Hres = 400
-        self.xL = 0.0
+        """Начальные значения области, источника и круга исследования."""
+        self.W = 5000.0       # ширина области (мм)
+        self.H = 5000.0       # высота области (мм)
+        self.Wres = 400       # разрешение по X (пикс)
+        self.Hres = 400       # разрешение по Y (пикс)
+        self.xL = 0.0         # координаты ламбертовского источника
         self.yL = 0.0
-        self.zL = 2000.0
-        self.I0 = 1000.0
-        self.circle_x = 0.0
+        self.zL = 2000.0      # высота источника над плоскостью
+        self.I0 = 1000.0      # сила излучения (Вт/ср)
+        self.circle_x = 0.0   # центр исследуемого круга
         self.circle_y = 0.0
         self.circle_r = 2000.0
         
+    # ------------------------------ UI ----------------------------- #
+        
     def setup_ui(self):
+        """Формирует главные фреймы, панель параметров, графики и поле с результатами."""
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
@@ -53,89 +62,97 @@ class IlluminationCalculator:
         controls_frame.rowconfigure(0, weight=1)
         controls_frame.rowconfigure(1, weight=0)
         
-        params_frame = ttk.LabelFrame(controls_frame, text="Параметры", padding="10")
+        params_frame = ttk.LabelFrame(controls_frame, text="Параметры", padding="5")
         params_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        params_frame.columnconfigure(1, weight=1)
+        params_frame.columnconfigure(0, weight=1)
         
-        ttk.Label(params_frame, text="Размер области (мм):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Label(params_frame, text="Ширина W:").grid(row=1, column=0, sticky=tk.W)
+        notebook = ttk.Notebook(params_frame)
+        notebook.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        
+        area_tab = ttk.Frame(notebook, padding=5)
+        notebook.add(area_tab, text="Область")
+        area_tab.columnconfigure(1, weight=1)
+        ttk.Label(area_tab, text="Ширина W (мм)").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.W_var = tk.DoubleVar(value=self.W)
-        ttk.Scale(params_frame, from_=100, to=10000, variable=self.W_var, orient=tk.HORIZONTAL, length=200).grid(row=1, column=1, sticky=(tk.W, tk.E))
-        self.W_label = ttk.Label(params_frame, text=f"{self.W:.0f} мм", cursor="hand2")
-        self.W_label.grid(row=1, column=2, padx=5)
+        ttk.Scale(area_tab, from_=100, to=10000, variable=self.W_var, orient=tk.HORIZONTAL, length=180).grid(row=0, column=1, sticky=(tk.W, tk.E))
+        self.W_label = ttk.Label(area_tab, text=f"{self.W:.0f} мм", cursor="hand2")
+        self.W_label.grid(row=0, column=2, padx=5)
         self.W_label.bind("<Button-1>", lambda event: self.prompt_value("Ширина W (мм)", self.W_var, 100, 10000))
         
-        ttk.Label(params_frame, text="Высота H:").grid(row=2, column=0, sticky=tk.W)
+        ttk.Label(area_tab, text="Высота H (мм)").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.H_var = tk.DoubleVar(value=self.H)
-        ttk.Scale(params_frame, from_=100, to=10000, variable=self.H_var, orient=tk.HORIZONTAL, length=200).grid(row=2, column=1, sticky=(tk.W, tk.E))
-        self.H_label = ttk.Label(params_frame, text=f"{self.H:.0f} мм", cursor="hand2")
-        self.H_label.grid(row=2, column=2, padx=5)
+        ttk.Scale(area_tab, from_=100, to=10000, variable=self.H_var, orient=tk.HORIZONTAL, length=180).grid(row=1, column=1, sticky=(tk.W, tk.E))
+        self.H_label = ttk.Label(area_tab, text=f"{self.H:.0f} мм", cursor="hand2")
+        self.H_label.grid(row=1, column=2, padx=5)
         self.H_label.bind("<Button-1>", lambda event: self.prompt_value("Высота H (мм)", self.H_var, 100, 10000))
         
-        ttk.Label(params_frame, text="Разрешение (пиксели):").grid(row=3, column=0, sticky=tk.W, pady=(10, 5))
-        ttk.Label(params_frame, text="Ширина Wres:").grid(row=4, column=0, sticky=tk.W)
+        ttk.Label(area_tab, text="Wres (пикс)").grid(row=2, column=0, sticky=tk.W, pady=(10, 2))
         self.Wres_var = tk.IntVar(value=self.Wres)
-        ttk.Scale(params_frame, from_=200, to=800, variable=self.Wres_var, orient=tk.HORIZONTAL, length=200).grid(row=4, column=1, sticky=(tk.W, tk.E))
-        self.Wres_label = ttk.Label(params_frame, text=f"{self.Wres}", cursor="hand2")
-        self.Wres_label.grid(row=4, column=2, padx=5)
+        ttk.Scale(area_tab, from_=200, to=800, variable=self.Wres_var, orient=tk.HORIZONTAL, length=180).grid(row=2, column=1, sticky=(tk.W, tk.E))
+        self.Wres_label = ttk.Label(area_tab, text=f"{self.Wres}", cursor="hand2")
+        self.Wres_label.grid(row=2, column=2, padx=5)
         self.Wres_label.bind("<Button-1>", lambda event: self.prompt_value("Разрешение Wres", self.Wres_var, 200, 800, integer=True))
         
-        ttk.Label(params_frame, text="Высота Hres:").grid(row=5, column=0, sticky=tk.W)
+        ttk.Label(area_tab, text="Hres (пикс)").grid(row=3, column=0, sticky=tk.W, pady=2)
         self.Hres_var = tk.IntVar(value=self.Hres)
-        ttk.Scale(params_frame, from_=200, to=800, variable=self.Hres_var, orient=tk.HORIZONTAL, length=200).grid(row=5, column=1, sticky=(tk.W, tk.E))
-        self.Hres_label = ttk.Label(params_frame, text=f"{self.Hres}", cursor="hand2")
-        self.Hres_label.grid(row=5, column=2, padx=5)
+        ttk.Scale(area_tab, from_=200, to=800, variable=self.Hres_var, orient=tk.HORIZONTAL, length=180).grid(row=3, column=1, sticky=(tk.W, tk.E))
+        self.Hres_label = ttk.Label(area_tab, text=f"{self.Hres}", cursor="hand2")
+        self.Hres_label.grid(row=3, column=2, padx=5)
         self.Hres_label.bind("<Button-1>", lambda event: self.prompt_value("Разрешение Hres", self.Hres_var, 200, 800, integer=True))
         
-        ttk.Label(params_frame, text="Источник света (мм):").grid(row=6, column=0, sticky=tk.W, pady=(10, 5))
-        ttk.Label(params_frame, text="X координата xL:").grid(row=7, column=0, sticky=tk.W)
+        light_tab = ttk.Frame(notebook, padding=5)
+        notebook.add(light_tab, text="Источник")
+        light_tab.columnconfigure(1, weight=1)
+        ttk.Label(light_tab, text="xL (мм)").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.xL_var = tk.DoubleVar(value=self.xL)
-        ttk.Scale(params_frame, from_=-10000, to=10000, variable=self.xL_var, orient=tk.HORIZONTAL, length=200).grid(row=7, column=1, sticky=(tk.W, tk.E))
-        self.xL_label = ttk.Label(params_frame, text=f"{self.xL:.0f} мм", cursor="hand2")
-        self.xL_label.grid(row=7, column=2, padx=5)
+        ttk.Scale(light_tab, from_=-10000, to=10000, variable=self.xL_var, orient=tk.HORIZONTAL, length=180).grid(row=0, column=1, sticky=(tk.W, tk.E))
+        self.xL_label = ttk.Label(light_tab, text=f"{self.xL:.0f} мм", cursor="hand2")
+        self.xL_label.grid(row=0, column=2, padx=5)
         self.xL_label.bind("<Button-1>", lambda event: self.prompt_value("Координата xL (мм)", self.xL_var, -10000, 10000))
         
-        ttk.Label(params_frame, text="Y координата yL:").grid(row=8, column=0, sticky=tk.W)
+        ttk.Label(light_tab, text="yL (мм)").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.yL_var = tk.DoubleVar(value=self.yL)
-        ttk.Scale(params_frame, from_=-10000, to=10000, variable=self.yL_var, orient=tk.HORIZONTAL, length=200).grid(row=8, column=1, sticky=(tk.W, tk.E))
-        self.yL_label = ttk.Label(params_frame, text=f"{self.yL:.0f} мм", cursor="hand2")
-        self.yL_label.grid(row=8, column=2, padx=5)
+        ttk.Scale(light_tab, from_=-10000, to=10000, variable=self.yL_var, orient=tk.HORIZONTAL, length=180).grid(row=1, column=1, sticky=(tk.W, tk.E))
+        self.yL_label = ttk.Label(light_tab, text=f"{self.yL:.0f} мм", cursor="hand2")
+        self.yL_label.grid(row=1, column=2, padx=5)
         self.yL_label.bind("<Button-1>", lambda event: self.prompt_value("Координата yL (мм)", self.yL_var, -10000, 10000))
         
-        ttk.Label(params_frame, text="Z координата zL:").grid(row=9, column=0, sticky=tk.W)
+        ttk.Label(light_tab, text="zL (мм)").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.zL_var = tk.DoubleVar(value=self.zL)
-        ttk.Scale(params_frame, from_=100, to=10000, variable=self.zL_var, orient=tk.HORIZONTAL, length=200).grid(row=9, column=1, sticky=(tk.W, tk.E))
-        self.zL_label = ttk.Label(params_frame, text=f"{self.zL:.0f} мм", cursor="hand2")
-        self.zL_label.grid(row=9, column=2, padx=5)
+        ttk.Scale(light_tab, from_=100, to=10000, variable=self.zL_var, orient=tk.HORIZONTAL, length=180).grid(row=2, column=1, sticky=(tk.W, tk.E))
+        self.zL_label = ttk.Label(light_tab, text=f"{self.zL:.0f} мм", cursor="hand2")
+        self.zL_label.grid(row=2, column=2, padx=5)
         self.zL_label.bind("<Button-1>", lambda event: self.prompt_value("Координата zL (мм)", self.zL_var, 100, 10000))
         
-        ttk.Label(params_frame, text="Сила излучения I0 (Вт/ср):").grid(row=10, column=0, sticky=tk.W, pady=(10, 5))
+        ttk.Label(light_tab, text="I0 (Вт/ср)").grid(row=3, column=0, sticky=tk.W, pady=(10, 2))
         self.I0_var = tk.DoubleVar(value=self.I0)
-        ttk.Scale(params_frame, from_=0.01, to=10000, variable=self.I0_var, orient=tk.HORIZONTAL, length=200).grid(row=10, column=1, sticky=(tk.W, tk.E))
-        self.I0_label = ttk.Label(params_frame, text=f"{self.I0:.2f} Вт/ср", cursor="hand2")
-        self.I0_label.grid(row=10, column=2, padx=5)
+        ttk.Scale(light_tab, from_=0.01, to=10000, variable=self.I0_var, orient=tk.HORIZONTAL, length=180).grid(row=3, column=1, sticky=(tk.W, tk.E))
+        self.I0_label = ttk.Label(light_tab, text=f"{self.I0:.2f} Вт/ср", cursor="hand2")
+        self.I0_label.grid(row=3, column=2, padx=5)
         self.I0_label.bind("<Button-1>", lambda event: self.prompt_value("Сила излучения I0 (Вт/ср)", self.I0_var, 0.01, 10000))
         
-        ttk.Label(params_frame, text="Область расчета (круг):").grid(row=11, column=0, sticky=tk.W, pady=(10, 5))
-        ttk.Label(params_frame, text="Центр X:").grid(row=12, column=0, sticky=tk.W)
+        circle_tab = ttk.Frame(notebook, padding=5)
+        notebook.add(circle_tab, text="Круг")
+        circle_tab.columnconfigure(1, weight=1)
+        ttk.Label(circle_tab, text="xC (мм)").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.circle_x_var = tk.DoubleVar(value=self.circle_x)
-        ttk.Scale(params_frame, from_=-5000, to=5000, variable=self.circle_x_var, orient=tk.HORIZONTAL, length=200).grid(row=12, column=1, sticky=(tk.W, tk.E))
-        self.circle_x_label = ttk.Label(params_frame, text=f"{self.circle_x:.0f} мм", cursor="hand2")
-        self.circle_x_label.grid(row=12, column=2, padx=5)
+        ttk.Scale(circle_tab, from_=-5000, to=5000, variable=self.circle_x_var, orient=tk.HORIZONTAL, length=180).grid(row=0, column=1, sticky=(tk.W, tk.E))
+        self.circle_x_label = ttk.Label(circle_tab, text=f"{self.circle_x:.0f} мм", cursor="hand2")
+        self.circle_x_label.grid(row=0, column=2, padx=5)
         self.circle_x_label.bind("<Button-1>", lambda event: self.prompt_value("Центр круга X (мм)", self.circle_x_var, -5000, 5000))
         
-        ttk.Label(params_frame, text="Центр Y:").grid(row=13, column=0, sticky=tk.W)
+        ttk.Label(circle_tab, text="yC (мм)").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.circle_y_var = tk.DoubleVar(value=self.circle_y)
-        ttk.Scale(params_frame, from_=-5000, to=5000, variable=self.circle_y_var, orient=tk.HORIZONTAL, length=200).grid(row=13, column=1, sticky=(tk.W, tk.E))
-        self.circle_y_label = ttk.Label(params_frame, text=f"{self.circle_y:.0f} мм", cursor="hand2")
-        self.circle_y_label.grid(row=13, column=2, padx=5)
+        ttk.Scale(circle_tab, from_=-5000, to=5000, variable=self.circle_y_var, orient=tk.HORIZONTAL, length=180).grid(row=1, column=1, sticky=(tk.W, tk.E))
+        self.circle_y_label = ttk.Label(circle_tab, text=f"{self.circle_y:.0f} мм", cursor="hand2")
+        self.circle_y_label.grid(row=1, column=2, padx=5)
         self.circle_y_label.bind("<Button-1>", lambda event: self.prompt_value("Центр круга Y (мм)", self.circle_y_var, -5000, 5000))
         
-        ttk.Label(params_frame, text="Радиус R:").grid(row=14, column=0, sticky=tk.W)
+        ttk.Label(circle_tab, text="Радиус R (мм)").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.circle_r_var = tk.DoubleVar(value=self.circle_r)
-        ttk.Scale(params_frame, from_=100, to=5000, variable=self.circle_r_var, orient=tk.HORIZONTAL, length=200).grid(row=14, column=1, sticky=(tk.W, tk.E))
-        self.circle_r_label = ttk.Label(params_frame, text=f"{self.circle_r:.0f} мм", cursor="hand2")
-        self.circle_r_label.grid(row=14, column=2, padx=5)
+        ttk.Scale(circle_tab, from_=100, to=5000, variable=self.circle_r_var, orient=tk.HORIZONTAL, length=180).grid(row=2, column=1, sticky=(tk.W, tk.E))
+        self.circle_r_label = ttk.Label(circle_tab, text=f"{self.circle_r:.0f} мм", cursor="hand2")
+        self.circle_r_label.grid(row=2, column=2, padx=5)
         self.circle_r_label.bind("<Button-1>", lambda event: self.prompt_value("Радиус круга R (мм)", self.circle_r_var, 100, 5000))
         
         button_frame = ttk.Frame(controls_frame)
@@ -172,7 +189,10 @@ class IlluminationCalculator:
         
         self.calculate()
         
+    # ------------------------------ CALLBACKS ----------------------------- #
+        
     def setup_slider_callbacks(self):
+        """Обновление подписей у всех параметров при движении ползунков."""
         self.W_var.trace_add("write", lambda *args: self.update_label(self.W_var, self.W_label, " мм"))
         self.H_var.trace_add("write", lambda *args: self.update_label(self.H_var, self.H_label, " мм"))
         self.Wres_var.trace_add("write", lambda *args: self.update_label(self.Wres_var, self.Wres_label, ""))
@@ -186,9 +206,11 @@ class IlluminationCalculator:
         self.circle_r_var.trace_add("write", lambda *args: self.update_label(self.circle_r_var, self.circle_r_label, " мм"))
         
     def update_label(self, var, label, suffix="", format_str="{:.0f}"):
+        """Перерисовывает подпись рядом со слайдером (используется колбэком trace)."""
         label.config(text=format_str.format(var.get()) + suffix)
     
     def prompt_value(self, title, variable, min_val, max_val, integer=False):
+        """Диалог ручного ввода значения параметра; контролирует допустимый диапазон."""
         current_value = variable.get()
         prompt = f"{title}\nДопустимый диапазон: [{min_val}, {max_val}]"
         value = simpledialog.askstring("Ввод значения", prompt, initialvalue=f"{current_value}")
@@ -206,7 +228,16 @@ class IlluminationCalculator:
             value = int(round(value))
         variable.set(value)
         
+    # ------------------------------ ГЛАВНАЯ ФИЗИЧЕСКАЯ МАТЕМАТИКА ----------------------------- #
+        
     def calculate_illumination(self):
+        """
+        Основная функция расчета двумерного поля освещенности E(x, y).
+
+        Возвращает:
+            E — матрица освещенности
+            X, Y — координатные сетки
+        """
         W = self.W_var.get()
         H = self.H_var.get()
         Wres = self.Wres_var.get()
@@ -219,37 +250,49 @@ class IlluminationCalculator:
         circle_y = self.circle_y_var.get()
         circle_r = self.circle_r_var.get()
         
+        # поддерживаем одинаковый физический шаг по X и Y, чтобы пиксели были квадратными
         pixel_size_x = W / Wres
         pixel_size_y = H / Hres
         
+        # Если физический размер пикселя по X ≠ по Y → исправляем разрешение
         if abs(pixel_size_x - pixel_size_y) > 0.01:
             pixel_size = max(pixel_size_x, pixel_size_y)
             Wres = int(W / pixel_size)
             Hres = int(H / pixel_size)
             self.Wres_var.set(Wres)
             self.Hres_var.set(Hres)
-        
+
+
+        # Координаты идут от -W/2 до +W/2, чтобы центр был (0,0)
         x = np.linspace(-W/2, W/2, Wres)
         y = np.linspace(-H/2, H/2, Hres)
         X, Y = np.meshgrid(x, y)
         
+        # вектор от каждой точки до источника
         dx = X - xL
         dy = Y - yL
         dz = zL
         
+        # расстояние до источника и косинус угла падения для ламбертовского источника
         r_squared = dx**2 + dy**2 + dz**2
         r = np.sqrt(r_squared)
         
         cos_theta = dz / r
         
+        # формула E = I0 * cos(theta) / r^2
         E = (I0 * cos_theta) / r_squared
         
+        # обнуляем освещенность вне заданного круга
         mask = (X - circle_x)**2 + (Y - circle_y)**2 <= circle_r**2
         E[~mask] = 0
         
         return E, X, Y
         
+    # ------------------------------ ОТДЕЛЬНАЯ ТОЧКА ----------------------------- #
+    
     def calculate_point_illumination(self, x, y, xL, yL, zL, I0):
+        """Расчет освещённости одной точки, используется для отчёта."""
+        # Вектор до источника
         dx = x - xL
         dy = y - yL
         dz = zL
@@ -263,11 +306,16 @@ class IlluminationCalculator:
         cos_theta = dz / r
         E_mm2 = (I0 * cos_theta) / r_squared
         
+        # перевод из мм² в м² для отчета
         E_m2 = E_mm2 * 1e6
         
         return E_m2
     
+    # ------------------------------ СТАТИСТИКА ПО КРУГУ ----------------------------- #
+    
     def calculate_statistics(self, E, X, Y, circle_x, circle_y, circle_r):
+        """max/min/mean внутри круга."""
+        # анализируем только значения внутри круга
         mask = (X - circle_x)**2 + (Y - circle_y)**2 <= circle_r**2
         E_in_circle = E[mask]
         
@@ -285,6 +333,7 @@ class IlluminationCalculator:
         return E_max_m2, E_min_m2, E_mean_m2
     
     def update_results_display(self, E, X, Y):
+        """Обновляет текстовую панель со значениями в пяти точках и сводной статистикой."""
         circle_x = self.circle_x_var.get()
         circle_y = self.circle_y_var.get()
         circle_r = self.circle_r_var.get()
@@ -336,8 +385,10 @@ class IlluminationCalculator:
         self.results_text.config(state=tk.DISABLED)
         
     def calculate(self):
+        """Общий цикл: расчёт → нормировка → графики → таблица значений."""
         E, X, Y = self.calculate_illumination()
         
+        # нормировка карты освещенности в диапазон [0, 255] для визуализации и сохранения
         E_normalized = np.zeros_like(E)
         E_max = np.max(E)
         if E_max > 0:
@@ -367,6 +418,7 @@ class IlluminationCalculator:
         
         self.section_fig.clear()
         ax_sec = self.section_fig.add_subplot(1, 1, 1)
+        # строим профили вдоль центральных осей
         center_x_idx = self.E_data.shape[1] // 2
         center_y_idx = self.E_data.shape[0] // 2
         
@@ -386,7 +438,10 @@ class IlluminationCalculator:
         self.section_fig.tight_layout()
         self.section_canvas.draw()
         
+    # ------------------------------ СОХРАНЕНИЕ ----------------------------- #
+        
     def save_image(self):
+        """Сохраняет нормированную карту освещённости."""
         if not hasattr(self, 'illumination_image'):
             return
             
